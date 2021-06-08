@@ -228,30 +228,50 @@ __device__ Ray constructPrimaryRay(int ppos, int ridx, volatile Aux& aux)
     const Mat4f& vtc = input.octreeMatrices.viewportToCamera;
     const Mat4f& cto = input.octreeMatrices.cameraToOctree;
 
+    // This is viewportToCamera * [fx, fy, 0, 1].
+    // [fx, fy, 0, 1] is a point on your screen.
+    // After applying the viewportToCamera matrix, it gets landed onto the focus of the camera in the camera space.
+    // So, pos is really just the homogeneous coordinates of the focus of the camera in camera space.
     float4 pos = make_float4(
         vtc.m00 * fx + vtc.m01 * fy + vtc.m03,
         vtc.m10 * fx + vtc.m11 * fy + vtc.m13,
         vtc.m20 * fx + vtc.m21 * fy + vtc.m23,
         vtc.m30 * fx + vtc.m31 * fy + vtc.m33);
 
+    // This is viewportToCamera * [fx, fy, -1, 1].
+    // Assuming z is pointing into the screen, a point with a z coordinate of -1 is on the near plane.
+    // So, near is just the homogeneous coordinates of the point where the ray pierce through the near plane.\
+    // Note that this is only the xyz coordinates of near that gets computed here.
+    // If you look a bit lower, the w component was named "a".
     float3 near = make_float3(
         pos.x - vtc.m02,
         pos.y - vtc.m12,
         pos.z - vtc.m22);
     float near_sz = input.octreeMatrices.pixelInOctree * vsize;
 
+    // This is basically ((pos.xyz / pos.w) - (A.xyz / A.w))*(A.w * pos.w)
+    // Where A is viewportToMatrix * [0,0,1,0] which is the third colume 
+    // (pos.xyz / pos.w) - (A.xyz / A.w) is, from the focus of the camera, we go in the direction of [0,0,-1,0]
     float3 diff = make_float3(
         vtc.m32 * pos.x - vtc.m02 * pos.w,
         vtc.m32 * pos.y - vtc.m12 * pos.w,
         vtc.m32 * pos.z - vtc.m22 * pos.w);
     float diff_sz = near_sz * vtc.m32;
 
+    // Note that a is just 1/near.w.
     float a = 1.0f / (pos.w - vtc.m32);
+
+    // This is 2 / (vtc[fx,fy,1,1].w * vtc[fx,fy,-1,1].w)
     float b = 2.0f * a / fmaxf(pos.w + vtc.m32, 1.0e-8f);
     float c = tmin * b;
 
     Ray ray;
+    // When we disable beam tracing, tmin is always 0, so c is always 0.
+    // If we only look at near*a. this is just near.xyz / near.w
     ray.orig = near * a - diff * c;
+
+
+    // Without beam optimization, this is diff * -b. 
     ray.dir  = diff * (c - b);
     ray.orig_sz = near_sz * a - diff_sz * c;
     ray.dir_sz  = diff_sz * (c - b);
